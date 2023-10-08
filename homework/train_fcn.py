@@ -80,7 +80,7 @@ def train(args):
 
             current_loss += loss.item()
             _, prediction = torch.max(output.data, 1)
-            accuracy = (prediction == target).sum().item() / target.size()
+            accuracy = (prediction == target).sum().item() / target.numel()
 
             # Log training accuracy and loss
             train_logger.add_scalar("Accuracy", accuracy, global_step)
