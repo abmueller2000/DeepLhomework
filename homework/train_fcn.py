@@ -52,7 +52,8 @@ def train(args):
     train_loader = load_dense_data("dense_data/train", args.num_workers, args.batch_size,
                                    transform=dense_transforms.Compose([
                                        dense_transforms.RandomHorizontalFlip(),
-                                       dense_transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.1),
+                                       dense_transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3,
+                                                                    hue=0.1),
                                        dense_transforms.ToTensor(),
                                        dense_transforms.Normalize(mean=[0.3321, 0.3219, 0.3267],
                                                                   std=[0.2554, 0.2318, 0.2434])
@@ -106,7 +107,7 @@ def train(args):
 
                 correct += (prediction == target).sum().item()
                 total = target.numel()
-                print("Correct: {correct}, Total: {total}")
+                print(f"Correct: {correct}, Total: {total}")
                 # IOU and confusion Matrix
                 confusion_matrix.add(prediction, target)
 
@@ -118,9 +119,9 @@ def train(args):
         print(f"Epoch: {epoch + 1}/{args.epochs}, Validation Accuracy: {valid_accuracy:.2f}%, Validation IOU: {valid_IOU:.3f}")
 
         if valid_IOU > top_valid_IOU and valid_IOU >= 0.3:
-          top_valid_IOU = valid_IOU
-          print(f"Saved model with IOU {top_valid_IOU:.3f}")
-          save_model(model)
+            top_valid_IOU = valid_IOU
+            print(f"Saved model with IOU {top_valid_IOU:.3f}")
+            save_model(model)
 
         # Update learning rate
         scheduler.step()
@@ -141,6 +142,7 @@ def log(logger, imgs, lbls, logits, global_step):
         logger.add_image('prediction',
                          dense_transforms.label_to_pil_image(logits[0].argmax(dim=0).cpu()).convert('RGB'), global_step,
                          dataformats='HWC')
+
 
 if __name__ == '__main__':
     import argparse
