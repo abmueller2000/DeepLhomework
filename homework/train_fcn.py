@@ -1,3 +1,4 @@
+from threading import current_thread
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -9,30 +10,30 @@ from .utils import load_dense_data, DENSE_CLASS_DISTRIBUTION, ConfusionMatrix
 from . import dense_transforms
 
 
-# Define the DownBlock with residual connections
-class DownBlock(nn.Module):
-    def __init__(self, in_channels, out_channels):
-        super(DownBlock, self).__init__()
-        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
-        self.relu = nn.ReLU(inplace=True)
+# # Define the DownBlock with residual connections
+# class DownBlock(nn.Module):
+#     def __init__(self, in_channels, out_channels):
+#         super(DownBlock, self).__init__()
+#         self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
+#         self.relu = nn.ReLU(inplace=True)
 
-    def forward(self, x):
-        out = self.conv(x)
-        out = self.relu(out)
-        return out + x  # Residual connection
+#     def forward(self, x):
+#         out = self.conv(x)
+#         out = self.relu(out)
+#         return out + x  # Residual connection
 
 
-# Define the UpBlock with residual connections
-class UpBlock(nn.Module):
-    def __init__(self, in_channels, out_channels):
-        super(UpBlock, self).__init__()
-        self.deconv = nn.ConvTranspose2d(in_channels, out_channels, kernel_size=3, padding=1)
-        self.relu = nn.ReLU(inplace=True)
+# # Define the UpBlock with residual connections
+# class UpBlock(nn.Module):
+#     def __init__(self, in_channels, out_channels):
+#         super(UpBlock, self).__init__()
+#         self.deconv = nn.ConvTranspose2d(in_channels, out_channels, kernel_size=3, padding=1)
+#         self.relu = nn.ReLU(inplace=True)
 
-    def forward(self, x):
-        out = self.deconv(x)
-        out = self.relu(out)
-        return out + x  # Residual connection
+#     def forward(self, x):
+#         out = self.deconv(x)
+#         out = self.relu(out)
+#         return out + x  # Residual connection
 
 
 def train(args):
@@ -41,8 +42,12 @@ def train(args):
     # Convert DENSE_CLASS_DISTRIBUTION to a tensor
     class_weights = torch.tensor(DENSE_CLASS_DISTRIBUTION, dtype=torch.float32)
 
-    # Create a weighted CrossEntropyLoss
+    # Loss function and optimizer
     criterion = nn.CrossEntropyLoss(weight=class_weights)
+    optimizer = optim.Adam(model.parameters(), lr=args.lr)
+
+    # Learning rate scheduler
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=4, gamma=0.10)
 
     train_loader = load_dense_data("dense_data/train", args.num_workers, args.batch_size,
                                    transform=dense_transforms.Compose([
@@ -54,52 +59,71 @@ def train(args):
                                    ]))
     valid_loader = load_dense_data("dense_data/valid", args.num_workers, args.batch_size)
 
-    optimizer = optim.Adam(model.parameters(), lr=args.lr)
     train_logger, valid_logger = None, None
     if args.log_dir is not None:
         train_logger = SummaryWriter(path.join(args.log_dir, 'train'), flush_secs=1)
         valid_logger = SummaryWriter(path.join(args.log_dir, 'valid'), flush_secs=1)
 
+    top_valid_IOU = 0.0
     global_step = 0
     for epoch in range(args.epochs):
         model.train()
-        confusion_matrix = ConfusionMatrix(size=5)
-        for batch_idx, (data, target) in enumerate(train_loader):
+        current_loss = 0.0
+
+        for batch_idx, (data, target) in enumerate(train_loader, 0):
             optimizer.zero_grad()
+            target = target.to(torch.int64)
             output = model(data)
-            loss = criterion(output, target.long())
+            loss = criterion(output, target)
             loss.backward()
             optimizer.step()
-            confusion_matrix.add(output.argmax(1), target.long())
-            log(train_logger, data, target, output, global_step)
+
+            current_loss += loss.item()
+            _, prediction = torch.max(output.data, 1)
+            accuracy = (prediction == target).sum().item() / target.size()
+
+            # Log training accuracy and loss
+            train_logger.add_scalar("Accuracy", accuracy, global_step)
+            train_logger.add_scalar("Loss", loss.item(), global_step)
+
             global_step += 1
 
-        iou = confusion_matrix.iou
-        if train_logger is not None:
-            train_logger.add_scalar('IoU/train', iou, epoch)
-
-        # Calculate and print training accuracy
-        train_accuracy = confusion_matrix.global_accuracy.item()  # Convert tensor to Python number
-        print(f"Epoch {epoch + 1}, Training accuracy: {train_accuracy:.2f}")
-        if train_logger is not None:
-            train_logger.add_scalar('Accuracy/train', train_accuracy, epoch)
+        # Post epoch accuracy and loss
+        epoch_loss = current_loss / len(train_loader)
+        print(f"Epoch {epoch + 1}/{args.epochs}, Training Loss: {epoch_loss:.3f}")
+        train_logger.add_scalar("epoch_loss", epoch_loss, epoch)
 
         # Validation
         model.eval()
         confusion_matrix = ConfusionMatrix(size=5)
+        correct = 0
+        total = 0
+
         with torch.no_grad():
             for data, target in valid_loader:
                 output = model(data)
-                confusion_matrix.add(output.argmax(1), target.long())
-                log(valid_logger, data, target, output, global_step)
+                _, prediction = torch.max(output.data, 1)
 
-        # Calculate and print validation accuracy
-        valid_accuracy = confusion_matrix.global_accuracy.item()  # Convert tensor to Python number
-        print(f"Epoch {epoch + 1}, Validation accuracy: {valid_accuracy:.2f}")
-        if valid_logger is not None:
-            valid_logger.add_scalar('Accuracy/valid', valid_accuracy, epoch)
+                correct += (prediction == target).sum().item()
+                total = target.numel()
+                print("Correct: {correct}, Total: {total}")
+                # IOU and confusion Matrix
+                confusion_matrix.add(prediction, target)
 
-    save_model(model)
+        # Calculate, log, and print validation accuracy and IOU
+        valid_accuracy = (correct / total) * 100
+        valid_IOU = confusion_matrix.iou
+        valid_logger.add_scalar("Accuracy", valid_accuracy, epoch)
+        valid_logger.add_scalar("IOU", valid_IOU, epoch)
+        print(f"Epoch: {epoch + 1}/{args.epochs}, Validation Accuracy: {valid_accuracy:.2f}%, Validation IOU: {valid_IOU:.3f}")
+
+        if valid_IOU > top_valid_IOU and valid_IOU >= 0.3:
+          top_valid_IOU = valid_IOU
+          print(f"Saved model with IOU {top_valid_IOU:.3f}")
+          save_model(model)
+
+        # Update learning rate
+        scheduler.step()
 
 
 def log(logger, imgs, lbls, logits, global_step):
