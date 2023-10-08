@@ -154,7 +154,7 @@ if __name__ == '__main__':
     parser.add_argument('--epochs', type=int, default=10, help='Number of epochs')
     parser.add_argument('--batch_size', type=int, default=64, help='Batch size')
     parser.add_argument('--log_interval', type=int, default=10, help='How often to log training status')
-    parser.add_argument('--num_workers', type=int, default=1, help='Number of workers for data loading')
+    parser.add_argument('--num_workers', type=int, default=2, help='Number of workers for data loading')
 
     # Put any other custom arguments here
 
