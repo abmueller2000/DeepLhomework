@@ -37,9 +37,7 @@ from . import dense_transforms
 
 
 def train(args):
-    # Initialize the model and move it to GPU if available
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = FCN().to(device)
+    model = FCN()
 
     # Convert DENSE_CLASS_DISTRIBUTION to a tensor
     class_weights = torch.tensor(DENSE_CLASS_DISTRIBUTION, dtype=torch.float32)
@@ -51,34 +49,29 @@ def train(args):
     # Learning rate scheduler
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=4, gamma=0.10)
 
-    # Define the transformations
-    transformations = dense_transforms.Compose([
-        dense_transforms.RandomHorizontalFlip(),
-        dense_transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.1),
-        dense_transforms.ToTensor(),
-        dense_transforms.Normalize(mean=[0.3321, 0.3219, 0.3267], std=[0.2554, 0.2318, 0.2434])
-    ])
-
-    # Initialize the loaders
-    train_loader = load_dense_data("dense_data/train", args.num_workers, args.batch_size, transform=transformations)
+    train_loader = load_dense_data("dense_data/train", args.num_workers, args.batch_size,
+                                   transform=dense_transforms.Compose([
+                                       dense_transforms.RandomHorizontalFlip(),
+                                       dense_transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3,
+                                                                    hue=0.1),
+                                       dense_transforms.ToTensor(),
+                                       dense_transforms.Normalize(mean=[0.3321, 0.3219, 0.3267],
+                                                                  std=[0.2554, 0.2318, 0.2434])
+                                   ]))
     valid_loader = load_dense_data("dense_data/valid", args.num_workers, args.batch_size)
 
-    # Initialize the loggers with a default directory if not provided
-    log_dir = args.log_dir if args.log_dir else 'logs'
-    train_logger = SummaryWriter(path.join(log_dir, 'train'))
-    valid_logger = SummaryWriter(path.join(log_dir, 'valid'))
+    train_logger, valid_logger = None, None
+    if args.log_dir is not None:
+        train_logger = SummaryWriter(path.join(args.log_dir, 'train'), flush_secs=1)
+        valid_logger = SummaryWriter(path.join(args.log_dir, 'valid'), flush_secs=1)
 
     top_valid_IOU = 0.0
     global_step = 0
-
     for epoch in range(args.epochs):
         model.train()
         current_loss = 0.0
 
         for batch_idx, (data, target) in enumerate(train_loader, 0):
-            # Move data and target to the same device as the model
-            data, target = data.to(device), target.to(device)
-            
             optimizer.zero_grad()
             target = target.to(torch.int64)
             output = model(data)
@@ -126,9 +119,9 @@ def train(args):
         print(f"Epoch: {epoch + 1}/{args.epochs}, Validation Accuracy: {valid_accuracy:.2f}%, Validation IOU: {valid_IOU:.3f}")
 
         if valid_IOU > top_valid_IOU and valid_IOU >= 0.3:
-          top_valid_IOU = valid_IOU
-          print(f"Saved model with IOU {top_valid_IOU:.3f}")
-          save_model(model)
+            top_valid_IOU = valid_IOU
+            print(f"Saved model with IOU {top_valid_IOU:.3f}")
+            save_model(model)
 
         # Update learning rate
         scheduler.step()
@@ -150,6 +143,7 @@ def log(logger, imgs, lbls, logits, global_step):
                          dense_transforms.label_to_pil_image(logits[0].argmax(dim=0).cpu()).convert('RGB'), global_step,
                          dataformats='HWC')
 
+
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
@@ -160,10 +154,9 @@ if __name__ == '__main__':
     parser.add_argument('--epochs', type=int, default=10, help='Number of epochs')
     parser.add_argument('--batch_size', type=int, default=64, help='Batch size')
     parser.add_argument('--log_interval', type=int, default=10, help='How often to log training status')
-    parser.add_argument('--num_workers', type=int, default=2, help='Number of workers for data loading')
+    parser.add_argument('--num_workers', type=int, default=1, help='Number of workers for data loading')
 
     # Put any other custom arguments here
 
     args = parser.parse_args()
     train(args)
-
