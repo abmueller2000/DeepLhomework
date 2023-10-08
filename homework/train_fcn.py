@@ -47,6 +47,7 @@ def train(args):
     train_loader = load_dense_data("dense_data/train", args.num_workers, args.batch_size,
                                    transform=dense_transforms.Compose([
                                        dense_transforms.RandomHorizontalFlip(),
+                                       dense_transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.1),
                                        dense_transforms.ToTensor(),
                                        dense_transforms.Normalize(mean=[0.3321, 0.3219, 0.3267],
                                                                   std=[0.2554, 0.2318, 0.2434])
