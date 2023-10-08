@@ -81,15 +81,15 @@ def train(args):
 
 if __name__ == '__main__':
     import argparse
-
     parser = argparse.ArgumentParser()
-    parser.add_argument('--log_dir')
+
+    parser.add_argument('--log_dir', default='log')
     parser.add_argument('-m', '--model', choices=['cnn', 'fcn'], default='cnn')
     parser.add_argument('--lr', type=float, default=0.01, help='Learning rate')
     parser.add_argument('--epochs', type=int, default=10, help='Number of epochs')
     parser.add_argument('--batch_size', type=int, default=64, help='Batch size')
     parser.add_argument('--log_interval', type=int, default=10, help='How often to log training status')
-    parser.add_argument('--num_workers', type=int, default=0, help='Number of workers for data loading')
+    parser.add_argument('--num_workers', type=int, default=2, help='Number of workers for data loading')
 
     args = parser.parse_args()
     train(args)
