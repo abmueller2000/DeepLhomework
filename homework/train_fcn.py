@@ -9,7 +9,9 @@ from .models import FCN, save_model
 from .utils import load_dense_data, DENSE_CLASS_DISTRIBUTION, ConfusionMatrix
 from . import dense_transforms
 import warnings
-warnings.filterwarnings("ignore", "The given NumPy array is not writable, and PyTorch does not support non-writable tensors.*")
+
+warnings.filterwarnings("ignore",
+                        "The given NumPy array is not writable, and PyTorch does not support non-writable tensors.*")
 
 
 def train(args):
@@ -54,7 +56,7 @@ def train(args):
         for batch_idx, (data, target) in enumerate(train_loader, 0):
             # Move data and target to the same device as the model
             data, target = data.to(device), target.to(device)
-            
+
             optimizer.zero_grad()
             target = target.to(torch.int64)
             output = model(data)
@@ -100,12 +102,13 @@ def train(args):
         valid_IOU = confusion_matrix.iou
         valid_logger.add_scalar("Accuracy", valid_accuracy, epoch)
         valid_logger.add_scalar("IOU", valid_IOU, epoch)
-        print(f"Epoch: {epoch + 1}/{args.epochs}, Validation Accuracy: {valid_accuracy:.2f}%, Validation IOU: {valid_IOU:.3f}")
+        print(
+            f"Epoch: {epoch + 1}/{args.epochs}, Validation Accuracy: {valid_accuracy:.2f}%, Validation IOU: {valid_IOU:.3f}")
 
         if valid_IOU > top_valid_IOU and valid_IOU >= 0.3:
-          top_valid_IOU = valid_IOU
-          print(f"Saved model with IOU {top_valid_IOU:.3f}")
-          save_model(model)
+            top_valid_IOU = valid_IOU
+            print(f"Saved model with IOU {top_valid_IOU:.3f}")
+            save_model(model)
 
         # Update learning rate
         scheduler.step()
@@ -127,8 +130,10 @@ def log(logger, imgs, lbls, logits, global_step):
                          dense_transforms.label_to_pil_image(logits[0].argmax(dim=0).cpu()).convert('RGB'), global_step,
                          dataformats='HWC')
 
+
 if __name__ == '__main__':
     import argparse
+
     parser = argparse.ArgumentParser()
 
     parser.add_argument('--log_dir', default='log')
