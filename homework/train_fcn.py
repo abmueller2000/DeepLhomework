@@ -17,7 +17,7 @@ warnings.filterwarnings("ignore",
 def train(args):
     # Initialize the model and move it to GPU if available
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = FCN().to(device)
+    model = FCN(num_classes=5).to(device)
 
     # Convert DENSE_CLASS_DISTRIBUTION to a tensor and move to the same device as the model
     class_weights = torch.tensor(DENSE_CLASS_DISTRIBUTION, dtype=torch.float32).to(device)
@@ -26,13 +26,15 @@ def train(args):
     criterion = nn.CrossEntropyLoss(weight=class_weights)
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
 
-    # Learning rate scheduler
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=4, gamma=0.10)
+    # # Learning rate scheduler
+    # scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=4, gamma=0.10)
 
     # Define the transformations
     transformations = dense_transforms.Compose([
         dense_transforms.RandomHorizontalFlip(),
         dense_transforms.ColorJitter(brightness=1.3, contrast=1.3, saturation=1.3, hue=0.5),
+        dense_transforms.RandomResizedCrop(64, scale=(0.25, 1.0), ratio=(0.5, 1.75)),
+        dense_transforms.RandomCrop(64),
         dense_transforms.ToTensor(),
         dense_transforms.Normalize(mean=[0.3321, 0.3219, 0.3267], std=[0.2554, 0.2318, 0.2434])
     ])
@@ -49,6 +51,7 @@ def train(args):
     top_valid_IOU = 0.0
     global_step = 0
 
+    # Train loop
     for epoch in range(args.epochs):
         model.train()
         current_loss = 0.0
@@ -66,7 +69,7 @@ def train(args):
 
             current_loss += loss.item()
             _, prediction = torch.max(output.data, 1)
-            accuracy = (prediction == target).sum().item() / target.numel()
+            accuracy = (prediction == target).sum().item() / target.size(0)
 
             # Log training accuracy and loss
             train_logger.add_scalar("Accuracy", accuracy, global_step)
@@ -102,16 +105,16 @@ def train(args):
         valid_IOU = confusion_matrix.iou
         valid_logger.add_scalar("Accuracy", valid_accuracy, epoch)
         valid_logger.add_scalar("IOU", valid_IOU, epoch)
-        print(
-            f"Epoch: {epoch + 1}/{args.epochs}, Validation Accuracy: {valid_accuracy:.2f}%, Validation IOU: {valid_IOU:.3f}")
+        print(f"Epoch: {epoch + 1}/{args.epochs}, Validation Accuracy: {valid_accuracy:.2f}%, Validation IOU: {valid_IOU:.3f}")
 
+        # Only save if IOU improved
         if valid_IOU > top_valid_IOU and valid_IOU >= 0.3:
             top_valid_IOU = valid_IOU
             print(f"Saved model with IOU {top_valid_IOU:.3f}")
             save_model(model)
 
-        # Update learning rate
-        scheduler.step()
+        # # Update learning rate
+        # scheduler.step()
 
 
 def log(logger, imgs, lbls, logits, global_step):
