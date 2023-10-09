@@ -92,7 +92,7 @@ def train(args):
                 _, prediction = torch.max(output.data, 1)
 
                 correct += (prediction == target).sum().item()
-                total = target.numel()
+                total += target.numel()
                 print(f"Correct: {correct}, Total: {total}")
                 # IOU and confusion Matrix
                 confusion_matrix.add(prediction, target)
