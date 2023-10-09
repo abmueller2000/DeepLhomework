@@ -8,6 +8,8 @@ from os import path
 from .models import FCN, save_model
 from .utils import load_dense_data, DENSE_CLASS_DISTRIBUTION, ConfusionMatrix
 from . import dense_transforms
+import warnings
+warnings.filterwarnings("ignore", "The given NumPy array is not writable, and PyTorch does not support non-writable tensors.*")
 
 
 def train(args):
