@@ -33,8 +33,8 @@ def train(args):
     transformations = dense_transforms.Compose([
         dense_transforms.RandomHorizontalFlip(),
         dense_transforms.ColorJitter(brightness=1.99, contrast=1.99, saturation=1.99, hue=0.5),
-        # dense_transforms.RandomResizedCrop(64, scale=(0.10, 1.5), ratio=(0.4, 1.9)),
-        # dense_transforms.RandomCrop(64),
+        dense_transforms.RandomResizedCrop(64, scale=(0.10, 1.5), ratio=(0.4, 1.9)),
+        dense_transforms.RandomCrop(64),
         dense_transforms.ToTensor(),
         dense_transforms.Normalize(mean=[0.3321, 0.3219, 0.3267], std=[0.2554, 0.2318, 0.2434])
     ])
