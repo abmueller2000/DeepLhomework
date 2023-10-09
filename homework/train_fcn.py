@@ -28,7 +28,6 @@ def train(args):
     # Define the transformations
     transformations = dense_transforms.Compose([
         dense_transforms.RandomHorizontalFlip(),
-        dense_transforms.transforms.RandomRotation(10),
         dense_transforms.ColorJitter(brightness=1.3, contrast=1.3, saturation=1.3, hue=0.5),
         dense_transforms.ToTensor(),
         dense_transforms.Normalize(mean=[0.3321, 0.3219, 0.3267], std=[0.2554, 0.2318, 0.2434])
