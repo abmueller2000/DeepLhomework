@@ -10,37 +10,13 @@ from .utils import load_dense_data, DENSE_CLASS_DISTRIBUTION, ConfusionMatrix
 from . import dense_transforms
 
 
-# # Define the DownBlock with residual connections
-# class DownBlock(nn.Module):
-#     def __init__(self, in_channels, out_channels):
-#         super(DownBlock, self).__init__()
-#         self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
-#         self.relu = nn.ReLU(inplace=True)
-
-#     def forward(self, x):
-#         out = self.conv(x)
-#         out = self.relu(out)
-#         return out + x  # Residual connection
-
-
-# # Define the UpBlock with residual connections
-# class UpBlock(nn.Module):
-#     def __init__(self, in_channels, out_channels):
-#         super(UpBlock, self).__init__()
-#         self.deconv = nn.ConvTranspose2d(in_channels, out_channels, kernel_size=3, padding=1)
-#         self.relu = nn.ReLU(inplace=True)
-
-#     def forward(self, x):
-#         out = self.deconv(x)
-#         out = self.relu(out)
-#         return out + x  # Residual connection
-
-
 def train(args):
-    model = FCN()
+    # Initialize the model and move it to GPU if available
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = FCN().to(device)
 
-    # Convert DENSE_CLASS_DISTRIBUTION to a tensor
-    class_weights = torch.tensor(DENSE_CLASS_DISTRIBUTION, dtype=torch.float32)
+    # Convert DENSE_CLASS_DISTRIBUTION to a tensor and move to the same device as the model
+    class_weights = torch.tensor(DENSE_CLASS_DISTRIBUTION, dtype=torch.float32).to(device)
 
     # Loss function and optimizer
     criterion = nn.CrossEntropyLoss(weight=class_weights)
@@ -49,29 +25,35 @@ def train(args):
     # Learning rate scheduler
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=4, gamma=0.10)
 
-    train_loader = load_dense_data("dense_data/train", args.num_workers, args.batch_size,
-                                   transform=dense_transforms.Compose([
-                                       dense_transforms.RandomHorizontalFlip(),
-                                       dense_transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3,
-                                                                    hue=0.1),
-                                       dense_transforms.ToTensor(),
-                                       dense_transforms.Normalize(mean=[0.3321, 0.3219, 0.3267],
-                                                                  std=[0.2554, 0.2318, 0.2434])
-                                   ]))
+    # Define the transformations
+    transformations = dense_transforms.Compose([
+        dense_transforms.RandomHorizontalFlip(),
+        dense_transforms.transforms.RandomRotation(10),
+        dense_transforms.ColorJitter(brightness=1.3, contrast=1.3, saturation=1.3, hue=0.5),
+        dense_transforms.ToTensor(),
+        dense_transforms.Normalize(mean=[0.3321, 0.3219, 0.3267], std=[0.2554, 0.2318, 0.2434])
+    ])
+
+    # Initialize the loaders
+    train_loader = load_dense_data("dense_data/train", args.num_workers, args.batch_size, transform=transformations)
     valid_loader = load_dense_data("dense_data/valid", args.num_workers, args.batch_size)
 
-    train_logger, valid_logger = None, None
-    if args.log_dir is not None:
-        train_logger = SummaryWriter(path.join(args.log_dir, 'train'), flush_secs=1)
-        valid_logger = SummaryWriter(path.join(args.log_dir, 'valid'), flush_secs=1)
+    # Initialize the loggers with a default directory if not provided
+    log_dir = args.log_dir if args.log_dir else 'logs'
+    train_logger = SummaryWriter(path.join(log_dir, 'train'))
+    valid_logger = SummaryWriter(path.join(log_dir, 'valid'))
 
     top_valid_IOU = 0.0
     global_step = 0
+
     for epoch in range(args.epochs):
         model.train()
         current_loss = 0.0
 
         for batch_idx, (data, target) in enumerate(train_loader, 0):
+            # Move data and target to the same device as the model
+            data, target = data.to(device), target.to(device)
+            
             optimizer.zero_grad()
             target = target.to(torch.int64)
             output = model(data)
@@ -102,6 +84,7 @@ def train(args):
 
         with torch.no_grad():
             for data, target in valid_loader:
+                data, target = data.to(device), target.to(device)
                 output = model(data)
                 _, prediction = torch.max(output.data, 1)
 
@@ -119,9 +102,9 @@ def train(args):
         print(f"Epoch: {epoch + 1}/{args.epochs}, Validation Accuracy: {valid_accuracy:.2f}%, Validation IOU: {valid_IOU:.3f}")
 
         if valid_IOU > top_valid_IOU and valid_IOU >= 0.3:
-            top_valid_IOU = valid_IOU
-            print(f"Saved model with IOU {top_valid_IOU:.3f}")
-            save_model(model)
+          top_valid_IOU = valid_IOU
+          print(f"Saved model with IOU {top_valid_IOU:.3f}")
+          save_model(model)
 
         # Update learning rate
         scheduler.step()
@@ -142,7 +125,6 @@ def log(logger, imgs, lbls, logits, global_step):
         logger.add_image('prediction',
                          dense_transforms.label_to_pil_image(logits[0].argmax(dim=0).cpu()).convert('RGB'), global_step,
                          dataformats='HWC')
-
 
 if __name__ == '__main__':
     import argparse
