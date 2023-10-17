@@ -1,10 +1,8 @@
-
 import torch
 from PIL import Image
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
-from torchvision.transforms import functional as F, ToTensor
-import csv
+from torchvision.transforms import functional as F
 
 from . import dense_transforms
 
@@ -15,28 +13,41 @@ DENSE_CLASS_DISTRIBUTION = [0.52683655, 0.02929112, 0.4352989, 0.0044619, 0.0041
 
 
 class SuperTuxDataset(Dataset):
-    def __init__(self, dataset_path):
-        self.img_data = []  # empty list to store data from the csv file later
-        # Using the python csv library to parse labels.csv
-        with open(f"{dataset_path}/labels.csv", newline='') as csvfile:
-            reader = csv.reader(csvfile, delimiter=',')
-            for label in reader:
-                # Only run for rows with labels that are in LABEL_NAMES
-                if label[1] in LABEL_NAMES:
-                    with Image.open(f"{dataset_path}/" + label[0], mode='r') as im:
-                        label_idx = LABEL_NAMES.index(label[1])
-                        to_tensor = transforms.ToTensor()
-                        img_tensor = to_tensor(im)
-                        self.img_data.append((img_tensor, label_idx))
+    def __init__(self, dataset_path, transform=transforms.ToTensor()):
+        """
+        Your code here
+        Hint: Use your solution (or the master solution) to HW1 / HW2
+        Hint: If you're loading (and storing) PIL images here, make sure to call image.load(),
+              to avoid an OS error for too many open files.
+        """
+        import csv
+        from os import path
+        self.data = []
+        self.transform = transform
+        with open(path.join(dataset_path, 'labels.csv'), newline='') as f:
+            reader = csv.reader(f)
+            for fname, label, _ in reader:
+                if label in LABEL_NAMES:
+                    image = Image.open(path.join(dataset_path, fname))
+                    image.load()
+                    label_id = LABEL_NAMES.index(label)
+                    self.data.append((image, label_id))
 
     def __len__(self):
         """
-        Returning the size of the dataset
+        Your code here
         """
-        return len(self.img_data)
+        return len(self.data)
 
     def __getitem__(self, idx):
-        return self.img_data[idx]
+        """
+        Your code here
+        Hint: Make sure to apply the transform here, if you use any randomized transforms.
+              This ensures that a different random transform is used every time
+        """
+        # return self.data[idx]
+        img, lbl = self.data[idx]
+        return self.transform(img), lbl
 
 
 class DenseSuperTuxDataset(Dataset):
@@ -120,7 +131,7 @@ class ConfusionMatrix(object):
 
     @property
     def per_class(self):
-        return self.matrix / (self.matrix.sum(1, keepdims=True) + 1e-5)
+        return (self.matrix / (self.matrix.sum(1, keepdim=True) + 1e-5)).cpu()
 
 
 if __name__ == '__main__':
