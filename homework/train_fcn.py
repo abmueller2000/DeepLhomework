@@ -1,121 +1,87 @@
-from threading import current_thread
 import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import DataLoader
-from torch.utils.tensorboard import SummaryWriter
-from os import path
+import numpy as np
+
 from .models import FCN, save_model
 from .utils import load_dense_data, DENSE_CLASS_DISTRIBUTION, ConfusionMatrix
 from . import dense_transforms
-import warnings
-
-warnings.filterwarnings("ignore",
-                        "The given NumPy array is not writable, and PyTorch does not support non-writable tensors.*")
+import torch.utils.tensorboard as tb
 
 
 def train(args):
-    # Initialize the model and move it to GPU if available
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = FCN(num_classes=5).to(device)
+    from os import path
+    model = FCN()
+    train_logger, valid_logger = None, None
+    if args.log_dir is not None:
+        train_logger = tb.SummaryWriter(path.join(args.log_dir, 'train'), flush_secs=1)
+        valid_logger = tb.SummaryWriter(path.join(args.log_dir, 'valid'), flush_secs=1)
 
-    # Convert DENSE_CLASS_DISTRIBUTION to a tensor and move to the same device as the model
-    class_weights = torch.tensor(DENSE_CLASS_DISTRIBUTION, dtype=torch.float32).to(device)
+    """
+    Your code here, modify your HW1 / HW2 code
 
-    # Loss function and optimizer
-    criterion = nn.CrossEntropyLoss(weight=class_weights)
-    optimizer = optim.Adam(model.parameters(), lr=args.lr)
+    """
+    import torch
 
-    # # Learning rate scheduler
-    # scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=4, gamma=0.10)
+    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
-    # Define the transformations
-    transformations = dense_transforms.Compose([
-        dense_transforms.RandomHorizontalFlip(),
-        dense_transforms.ColorJitter(brightness=1.99, contrast=1.99, saturation=1.99, hue=0.5),
-        dense_transforms.RandomResizedCrop(64, scale=(0.10, 1.5), ratio=(0.4, 1.9)),
-        dense_transforms.RandomCrop(64),
-        dense_transforms.ToTensor(),
-        dense_transforms.Normalize(mean=[0.3321, 0.3219, 0.3267], std=[0.2554, 0.2318, 0.2434])
-    ])
+    model = FCN().to(device)
+    if args.continue_training:
+        model.load_state_dict(torch.load(path.join(path.dirname(path.abspath(__file__)), 'fcn.th')))
 
-    # Initialize the loaders
-    train_loader = load_dense_data("dense_data/train", args.num_workers, args.batch_size, transform=transformations)
-    valid_loader = load_dense_data("dense_data/valid", args.num_workers, args.batch_size)
+    # optimizer = torch.optim.SGD(model.parameters(), lr=args.learning_rate, momentum=0.9, weight_decay=1e-3)
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate, weight_decay=1e-5)
+    w = torch.as_tensor(DENSE_CLASS_DISTRIBUTION)**(-args.gamma)
+    loss = torch.nn.CrossEntropyLoss(weight=w / w.mean()).to(device)
 
-    # Initialize the loggers with a default directory if not provided
-    log_dir = args.log_dir if args.log_dir else 'logs'
-    train_logger = SummaryWriter(path.join(log_dir, 'train'))
-    valid_logger = SummaryWriter(path.join(log_dir, 'valid'))
+    import inspect
+    transform = eval(args.transform, {k: v for k, v in inspect.getmembers(dense_transforms) if inspect.isclass(v)})
+    train_data = load_dense_data('dense_data/train', num_workers=4, transform=transform)
+    valid_data = load_dense_data('dense_data/valid', num_workers=4)
 
-    top_valid_IOU = 0.0
     global_step = 0
-
-    # Train loop
-    for epoch in range(args.epochs):
+    for epoch in range(args.num_epoch):
         model.train()
-        current_loss = 0.0
+        conf = ConfusionMatrix()
+        for img, label in train_data:
+            img, label = img.to(device), label.to(device).long()
 
-        for batch_idx, (data, target) in enumerate(train_loader, 0):
-            # Move data and target to the same device as the model
-            data, target = data.to(device), target.to(device)
+            logit = model(img)
+            loss_val = loss(logit, label)
+            if train_logger is not None and global_step % 100 == 0:
+                log(train_logger, img, label, logit, global_step)
+
+            if train_logger is not None:
+                train_logger.add_scalar('loss', loss_val, global_step)
+            conf.add(logit.argmax(1), label)
 
             optimizer.zero_grad()
-            target = target.to(torch.int64)
-            output = model(data)
-            loss = criterion(output, target)
-            loss.backward()
+            loss_val.backward()
             optimizer.step()
-
-            current_loss += loss.item()
-            _, prediction = torch.max(output.data, 1)
-            accuracy = (prediction == target).sum().item() / target.size(0)
-
-            # Log training accuracy and loss
-            train_logger.add_scalar("Accuracy", accuracy, global_step)
-            train_logger.add_scalar("Loss", loss.item(), global_step)
-
             global_step += 1
 
-        # Post epoch accuracy and loss
-        epoch_loss = current_loss / len(train_loader)
-        print(f"Epoch {epoch + 1}/{args.epochs}, Training Loss: {epoch_loss:.3f}")
-        train_logger.add_scalar("epoch_loss", epoch_loss, epoch)
+        if train_logger:
+            train_logger.add_scalar('global_accuracy', conf.global_accuracy, global_step)
+            train_logger.add_scalar('average_accuracy', conf.average_accuracy, global_step)
+            train_logger.add_scalar('iou', conf.iou, global_step)
 
-        # Validation
         model.eval()
-        confusion_matrix = ConfusionMatrix(size=5)
-        correct = 0
-        total = 0
+        val_conf = ConfusionMatrix()
+        for img, label in valid_data:
+            img, label = img.to(device), label.to(device).long()
+            logit = model(img)
+            val_conf.add(logit.argmax(1), label)
 
-        with torch.no_grad():
-            for data, target in valid_loader:
-                data, target = data.to(device), target.to(device)
-                output = model(data)
-                _, prediction = torch.max(output.data, 1)
+        if valid_logger is not None:
+            log(valid_logger, img, label, logit, global_step)
 
-                correct += (prediction == target).sum().item()
-                total += target.numel()
-                print(f"Correct: {correct}, Total: {total}")
-                # IOU and confusion Matrix
-                confusion_matrix.add(prediction, target)
+        if valid_logger:
+            valid_logger.add_scalar('global_accuracy', val_conf.global_accuracy, global_step)
+            valid_logger.add_scalar('average_accuracy', val_conf.average_accuracy, global_step)
+            valid_logger.add_scalar('iou', val_conf.iou, global_step)
 
-        # Calculate, log, and print validation accuracy and IOU
-        valid_accuracy = (correct / total) * 100
-        valid_IOU = confusion_matrix.iou
-        valid_logger.add_scalar("Accuracy", valid_accuracy, epoch)
-        valid_logger.add_scalar("IOU", valid_IOU, epoch)
-        print(f"Epoch: {epoch + 1}/{args.epochs}, Validation Accuracy: {valid_accuracy:.2f}%, Validation IOU: {valid_IOU:.3f}")
-
-        # Only save if IOU improved
-        if valid_IOU > top_valid_IOU and valid_IOU >= 0.3:
-            top_valid_IOU = valid_IOU
-            print(f"Saved model with IOU {top_valid_IOU:.3f}")
-            save_model(model)
-
-        # # Update learning rate
-        # scheduler.step()
-
+        if valid_logger is None or train_logger is None:
+            print('epoch %-3d \t acc = %0.3f \t val acc = %0.3f \t iou = %0.3f \t val iou = %0.3f' %
+                  (epoch, conf.global_accuracy, val_conf.global_accuracy, conf.iou, val_conf.iou))
+        save_model(model)
 
 def log(logger, imgs, lbls, logits, global_step):
     """
@@ -125,29 +91,26 @@ def log(logger, imgs, lbls, logits, global_step):
     logits: predicted logits tensor
     global_step: iteration
     """
-    if logger is not None:
-        logger.add_image('image', imgs[0], global_step)
-        logger.add_image('label', dense_transforms.label_to_pil_image(lbls[0].cpu()).convert('RGB'), global_step,
-                         dataformats='HWC')
-        logger.add_image('prediction',
-                         dense_transforms.label_to_pil_image(logits[0].argmax(dim=0).cpu()).convert('RGB'), global_step,
-                         dataformats='HWC')
-
+    logger.add_image('image', imgs[0], global_step)
+    logger.add_image('label', np.array(dense_transforms.label_to_pil_image(lbls[0].cpu()).
+                                             convert('RGB')), global_step, dataformats='HWC')
+    logger.add_image('prediction', np.array(dense_transforms.
+                                                  label_to_pil_image(logits[0].argmax(dim=0).cpu()).
+                                                  convert('RGB')), global_step, dataformats='HWC')
 
 if __name__ == '__main__':
     import argparse
 
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--log_dir', default='log')
-    parser.add_argument('-m', '--model', choices=['cnn', 'fcn'], default='cnn')
-    parser.add_argument('--lr', type=float, default=0.01, help='Learning rate')
-    parser.add_argument('--epochs', type=int, default=10, help='Number of epochs')
-    parser.add_argument('--batch_size', type=int, default=64, help='Batch size')
-    parser.add_argument('--log_interval', type=int, default=10, help='How often to log training status')
-    parser.add_argument('--num_workers', type=int, default=2, help='Number of workers for data loading')
-
-    # Put any other custom arguments here
+    parser.add_argument('--log_dir')
+    # Put custom arguments here
+    parser.add_argument('-n', '--num_epoch', type=int, default=20)
+    parser.add_argument('-lr', '--learning_rate', type=float, default=1e-3)
+    parser.add_argument('-g', '--gamma', type=float, default=0, help="class dependent weight for cross entropy")
+    parser.add_argument('-c', '--continue_training', action='store_true')
+    parser.add_argument('-t', '--transform',
+                        default='Compose([ColorJitter(0.9, 0.9, 0.9, 0.1), RandomHorizontalFlip(), ToTensor()])')
 
     args = parser.parse_args()
     train(args)
