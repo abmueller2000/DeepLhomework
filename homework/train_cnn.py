@@ -1,95 +1,108 @@
-from os import path
 from .models import CNNClassifier, save_model
 from .utils import ConfusionMatrix, load_data, LABEL_NAMES
 import torch
 import torchvision
 import torch.utils.tensorboard as tb
-from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 
 def train(args):
+    from os import path
     model = CNNClassifier()
-    criterion = torch.nn.CrossEntropyLoss()
-    optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=1e-4)
-    scheduler = ReduceLROnPlateau(optimizer, 'min', patience=5, factor=0.5)
-
     train_logger, valid_logger = None, None
     if args.log_dir is not None:
         train_logger = tb.SummaryWriter(path.join(args.log_dir, 'train'), flush_secs=1)
         valid_logger = tb.SummaryWriter(path.join(args.log_dir, 'valid'), flush_secs=1)
 
-    train_loader = load_data("data/train", args.num_workers, args.batch_size)
-    valid_loader = load_data("data/valid", args.num_workers, args.batch_size)
+    """
+    Your code here, modify your HW1 / HW2 code
+    
+    """
+    import torch
 
-    best_val_loss = float('inf')
-    epochs_without_improvement = 0
+    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
-    for epoch in range(args.epochs):
+    model = CNNClassifier().to(device)
+    if args.continue_training:
+        model.load_state_dict(torch.load(path.join(path.dirname(path.abspath(__file__)), 'cnn.th')))
+
+    optimizer = torch.optim.SGD(model.parameters(), lr=args.learning_rate, momentum=0.9, weight_decay=1e-5)
+    loss = torch.nn.CrossEntropyLoss()
+
+    import inspect
+    transform = eval(args.transform,
+                     {k: v for k, v in inspect.getmembers(torchvision.transforms) if inspect.isclass(v)})
+    train_data = load_data('data/train', transform=transform, num_workers=4)
+    valid_data = load_data('data/valid', num_workers=4)
+
+    global_step = 0
+    for epoch in range(args.num_epoch):
         model.train()
-        correct_train = 0
-        total_train = 0
+        confusion = ConfusionMatrix(len(LABEL_NAMES))
+        for img, label in train_data:
+            if train_logger is not None:
+                train_logger.add_images('augmented_image', img[:4])
+            img, label = img.to(device), label.to(device)
 
-        for batch_idx, (data, target) in enumerate(train_loader):
+            logit = model(img)
+            loss_val = loss(logit, label)
+            confusion.add(logit.argmax(1), label)
+
+            if train_logger is not None:
+                train_logger.add_scalar('loss', loss_val, global_step)
+
             optimizer.zero_grad()
-            output = model(data)
-            loss = criterion(output, target)
-            loss.backward()
+            loss_val.backward()
             optimizer.step()
+            global_step += 1
 
-            _, predicted_train = torch.max(output.data, 1)
-            total_train += target.size(0)
-            correct_train += (predicted_train == target).sum().item()
-
-            if batch_idx % args.log_interval == 0:
-                print(f"Train Epoch: {epoch}, Batch: {batch_idx}, Loss: {loss.item()}")
-
-        train_accuracy = 100 * correct_train / total_train
-        print(f"Training Accuracy after epoch {epoch}: {train_accuracy:.2f}%")
+        if train_logger:
+            train_logger.add_scalar('accuracy', confusion.global_accuracy, global_step)
+            import matplotlib.pyplot as plt
+            f, ax = plt.subplots()
+            ax.imshow(confusion.per_class, interpolation='nearest', cmap=plt.cm.Blues)
+            for i in range(confusion.per_class.size(0)):
+                for j in range(confusion.per_class.size(1)):
+                    ax.text(j, i, format(confusion.per_class[i, j], '.2f'),
+                            ha="center", va="center", color="black")
+            train_logger.add_figure('confusion', f, global_step)
 
         model.eval()
-        correct_val = 0
-        total_val = 0
-        val_loss = 0
+        val_confusion = ConfusionMatrix(len(LABEL_NAMES))
+        for img, label in valid_data:
+            img, label = img.to(device), label.to(device)
+            val_confusion.add(model(img).argmax(1), label)
 
-        with torch.no_grad():
-            for data, target in valid_loader:
-                output = model(data)
-                loss = criterion(output, target)
-                val_loss += loss.item()
+        if valid_logger:
+            valid_logger.add_scalar('accuracy', val_confusion.global_accuracy, global_step)
+            import matplotlib.pyplot as plt
+            f, ax = plt.subplots()
+            ax.imshow(val_confusion.per_class, interpolation='nearest', cmap=plt.cm.Blues)
+            for i in range(val_confusion.per_class.size(0)):
+                for j in range(val_confusion.per_class.size(1)):
+                    ax.text(j, i, format(val_confusion.per_class[i, j], '.2f'),
+                            ha="center", va="center", color="black")
+            valid_logger.add_figure('confusion', f, global_step)
 
-                _, predicted_val = torch.max(output.data, 1)
-                total_val += target.size(0)
-                correct_val += (predicted_val == target).sum().item()
-
-        val_accuracy = 100 * correct_val / total_val
-        print(f"Validation Accuracy after epoch {epoch}: {val_accuracy:.2f}%")
-
-        val_loss /= len(valid_loader)
-        scheduler.step(val_loss)
-
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
-            epochs_without_improvement = 0
-        else:
-            epochs_without_improvement += 1
-            if epochs_without_improvement >= 15:
-                print("Early stopping due to no improvement.")
-                break
-
+        if valid_logger is None or train_logger is None:
+            print('epoch %-3d \t acc = %0.3f \t val acc = %0.3f' % (epoch, confusion.global_accuracy,
+                                                                    val_confusion.global_accuracy))
         save_model(model)
 
 
 if __name__ == '__main__':
     import argparse
+
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--log_dir', default='log')
-    parser.add_argument('-m', '--model', choices=['cnn', 'fcn'], default='cnn')
-    parser.add_argument('--lr', type=float, default=0.01, help='Learning rate')
-    parser.add_argument('--epochs', type=int, default=10, help='Number of epochs')
-    parser.add_argument('--batch_size', type=int, default=64, help='Batch size')
-    parser.add_argument('--log_interval', type=int, default=10, help='How often to log training status')
-    parser.add_argument('--num_workers', type=int, default=2, help='Number of workers for data loading')
+    parser.add_argument('--log_dir')
+    # Put custom arguments here
+    parser.add_argument('-n', '--num_epoch', type=int, default=75)
+    parser.add_argument('-lr', '--learning_rate', type=float, default=1e-2)
+    parser.add_argument('-c', '--continue_training', action='store_true')
+    parser.add_argument('-t', '--transform',
+                        default='Compose([ColorJitter(0.9, 0.9, 0.9, 0.1), RandomHorizontalFlip(), ToTensor()])')
 
     args = parser.parse_args()
     train(args)
+
+
